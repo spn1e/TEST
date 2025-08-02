@@ -1,0 +1,75 @@
+simulation:
+  n_students: 120
+  days: 60
+  seed: 42
+
+zones:
+  spawn:
+    x: 0
+    z: 0
+    radius: 30
+  tutorial:
+    x: 50
+    z: 0
+    radius: 40
+  building_area:
+    x: 100
+    z: 100
+    radius: 100
+  collaboration_space:
+    x: -100
+    z: 100
+    radius: 80
+  challenge_zone:
+    x: 0
+    z: 200
+    radius: 60
+  resource_area:
+    x: -150
+    z: -50
+    radius: 50
+  showcase_area:
+    x: 150
+    z: -50
+    radius: 70
+
+quests:
+  max_difficulty: 5
+  completion_bonus: 100
+  attempt_penalty: 10
+
+analytics:
+  engagement_weights:
+    quest_completion: 0.3
+    building_activity: 0.3
+    collaboration: 0.2
+    skill_progression: 0.2
+  risk_thresholds:
+    engagement_score: 0.3
+    quest_completion_rate: 0.4
+    days_active: 5
+
+visualization:
+  theme: plotly
+  height: 600
+  width: 1200
+  color_schemes:
+    zones:
+      - '#FF6B6B'
+      - '#4ECDC4'
+      - '#45B7D1'
+      - '#96CEB4'
+      - '#FECA57'
+      - '#DDA0DD'
+    performance:
+      - '#FF4757'
+      - '#FFA502'
+      - '#FFDD59'
+      - '#32FF7E'
+      - '#18DCFF'
+    skills:
+      - '#6C5CE7'
+      - '#A29BFE'
+      - '#FD79A8'
+      - '#FDCB6E'
+      - '#6C5CE7'
