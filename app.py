@@ -7,6 +7,9 @@ from pathlib import Path
 import sys
 import os
 import traceback
+import json
+import io
+from datetime import datetime
 
 # Page configuration (must be first Streamlit command)
 st.set_page_config(
@@ -54,23 +57,6 @@ if debug_mode:
     st.sidebar.write(f"**Script Dir:** {Path(__file__).parent}")
     st.sidebar.write(f"**Project Root:** {project_root}")
     st.sidebar.write(f"**Src Found:** {'✅' if src_found else '❌'}")
-    
-    # Show Python path
-    with st.sidebar.expander("Python Path"):
-        for i, path in enumerate(sys.path[:5]):
-            st.write(f"{i}: {path}")
-    
-    # Show directory contents
-    with st.sidebar.expander("Directory Contents"):
-        try:
-            files = sorted(os.listdir(project_root))[:20]  # Show first 20 files
-            for f in files:
-                if os.path.isdir(project_root / f):
-                    st.write(f"📁 {f}/")
-                else:
-                    st.write(f"📄 {f}")
-        except Exception as e:
-            st.write(f"Error listing directory: {e}")
 
 # Import custom modules with detailed error handling
 import_errors = []
@@ -136,8 +122,149 @@ st.markdown("""
         padding: 10px;
         margin: 10px 0;
     }
+    .upload-box {
+        border: 2px dashed #1f77b4;
+        border-radius: 10px;
+        padding: 20px;
+        text-align: center;
+        background-color: #f8f9fa;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+# ============================================================================
+# DATA UPLOAD FUNCTIONS
+# ============================================================================
+
+def validate_dataset_columns(df, dataset_type):
+    """Validate that uploaded dataset has required columns"""
+    required_columns = {
+        'students': ['student_id', 'grade_level', 'learning_style'],
+        'movements': ['student_id', 'timestamp', 'x', 'y', 'z', 'zone'],
+        'buildings': ['student_id', 'timestamp', 'block_type', 'x', 'y', 'z'],
+        'quests': ['student_id', 'quest_name', 'start_time', 'completed', 'score'],
+        'collaborations': ['timestamp', 'student_1', 'student_2', 'interaction_type'],
+        'learning_analytics': ['student_id', 'engagement_score', 'quest_completion_rate', 'days_active']
+    }
+    
+    if dataset_type not in required_columns:
+        return False, f"Unknown dataset type: {dataset_type}"
+    
+    missing_cols = [col for col in required_columns[dataset_type] if col not in df.columns]
+    
+    if missing_cols:
+        return False, f"Missing required columns: {', '.join(missing_cols)}"
+    
+    return True, "Valid"
+
+def process_uploaded_file(uploaded_file, dataset_type):
+    """Process uploaded file and return DataFrame"""
+    try:
+        # Determine file type and read accordingly
+        if uploaded_file.name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file)
+        elif uploaded_file.name.endswith(('.xlsx', '.xls')):
+            df = pd.read_excel(uploaded_file)
+        elif uploaded_file.name.endswith('.json'):
+            df = pd.read_json(uploaded_file)
+        else:
+            return None, "Unsupported file format"
+        
+        # Validate columns
+        is_valid, message = validate_dataset_columns(df, dataset_type)
+        if not is_valid:
+            return None, message
+        
+        # Convert date columns if present
+        date_columns = ['timestamp', 'start_time', 'completion_time']
+        for col in date_columns:
+            if col in df.columns:
+                try:
+                    df[col] = pd.to_datetime(df[col])
+                except:
+                    pass
+        
+        # Basic data type conversions
+        if 'student_id' in df.columns:
+            df['student_id'] = df['student_id'].astype(str)
+        
+        numeric_columns = ['x', 'y', 'z', 'engagement_score', 'quest_completion_rate', 
+                          'score', 'days_active', 'grade_level']
+        for col in numeric_columns:
+            if col in df.columns:
+                try:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                except:
+                    pass
+        
+        return df, "Success"
+        
+    except Exception as e:
+        return None, str(e)
+
+def create_sample_datasets():
+    """Create sample datasets for download as templates"""
+    samples = {
+        'students': pd.DataFrame({
+            'student_id': ['STU_001', 'STU_002', 'STU_003'],
+            'username': ['player1', 'player2', 'player3'],
+            'grade_level': [6, 7, 8],
+            'learning_style': ['visual', 'kinesthetic', 'auditory'],
+            'prior_minecraft_experience': ['beginner', 'intermediate', 'none'],
+            'collaboration_preference': ['pairs', 'solo', 'groups'],
+            'stem_interest_pre': [3, 4, 2]
+        }),
+        'movements': pd.DataFrame({
+            'student_id': ['STU_001', 'STU_001', 'STU_002'],
+            'timestamp': pd.date_range('2024-01-01', periods=3, freq='H'),
+            'x': [100.5, 150.2, 75.8],
+            'y': [64, 65, 70],
+            'z': [200.1, 180.5, 190.3],
+            'zone': ['spawn', 'building_area', 'tutorial'],
+            'session_id': ['S001', 'S001', 'S002']
+        }),
+        'learning_analytics': pd.DataFrame({
+            'student_id': ['STU_001', 'STU_002', 'STU_003'],
+            'engagement_score': [0.85, 0.72, 0.91],
+            'quest_completion_rate': [0.90, 0.75, 0.95],
+            'avg_attempts_per_quest': [1.5, 2.3, 1.2],
+            'building_complexity_avg': [7.5, 5.8, 8.2],
+            'total_blocks_placed': [2500, 1800, 3200],
+            'collaboration_events': [45, 32, 58],
+            'days_active': [25, 20, 28],
+            'skill_progression': [0.78, 0.65, 0.88],
+            'stem_interest_pre': [3, 4, 2],
+            'stem_interest_post': [5, 5, 4],
+            'learning_gain': [1.2, 0.8, 1.5]
+        })
+    }
+    return samples
+
+def merge_uploaded_datasets(datasets_dict):
+    """Merge uploaded datasets and fill missing ones with minimal synthetic data"""
+    required_datasets = ['students', 'movements', 'buildings', 'quests', 'collaborations', 'learning_analytics']
+    
+    # Check which datasets are missing
+    missing_datasets = [ds for ds in required_datasets if ds not in datasets_dict or datasets_dict[ds] is None]
+    
+    if missing_datasets and MinecraftEducationSimulator:
+        # Generate minimal synthetic data for missing datasets
+        st.info(f"Generating synthetic data for missing datasets: {', '.join(missing_datasets)}")
+        
+        # Get number of students from uploaded data or use default
+        n_students = 10
+        if 'students' in datasets_dict and datasets_dict['students'] is not None:
+            n_students = len(datasets_dict['students'])
+        
+        # Generate minimal synthetic data
+        simulator = MinecraftEducationSimulator()
+        synthetic_data = simulator.generate_complete_dataset(n_students, 7)
+        
+        # Fill in missing datasets
+        for dataset in missing_datasets:
+            datasets_dict[dataset] = synthetic_data[dataset]
+    
+    return datasets_dict
 
 # ============================================================================
 # SESSION STATE INITIALIZATION
@@ -148,6 +275,7 @@ if 'data_generated' not in st.session_state:
     st.session_state.datasets = None
     st.session_state.generation_error = None
     st.session_state.analyzer = None
+    st.session_state.uploaded_datasets = {}
 
 # ============================================================================
 # SIDEBAR - DATA CONFIGURATION
@@ -245,22 +373,232 @@ with st.sidebar:
                         if debug_mode:
                             st.code(traceback.format_exc())
     
-    else:
-        st.info("📤 Upload feature coming soon!")
-        st.markdown("""
-        **Supported formats:**
-        - CSV files
-        - Excel files
-        - JSON data
-        """)
+    else:  # Upload Real Data
+        st.markdown("### 📤 Upload Your Data")
         
-        # Placeholder for file upload
-        uploaded_file = st.file_uploader(
-            "Choose a file",
-            type=['csv', 'xlsx', 'json'],
-            disabled=True,
-            help="This feature will be available in the next release"
+        # Upload method selection
+        upload_method = st.radio(
+            "Upload Method",
+            ["Individual Files", "Single Combined File", "Use Sample Data"],
+            help="Choose how to upload your data"
         )
+        
+        if upload_method == "Individual Files":
+            st.info("Upload separate files for each dataset type")
+            
+            # Create tabs for different dataset types
+            dataset_types = ['students', 'movements', 'buildings', 'quests', 'collaborations', 'learning_analytics']
+            
+            with st.expander("📁 Upload Dataset Files", expanded=True):
+                uploaded_files = {}
+                
+                for dataset_type in dataset_types:
+                    st.markdown(f"**{dataset_type.replace('_', ' ').title()}**")
+                    
+                    # Show required columns
+                    required_cols = {
+                        'students': "student_id, grade_level, learning_style",
+                        'movements': "student_id, timestamp, x, y, z, zone",
+                        'buildings': "student_id, timestamp, block_type, x, y, z",
+                        'quests': "student_id, quest_name, start_time, completed, score",
+                        'collaborations': "timestamp, student_1, student_2, interaction_type",
+                        'learning_analytics': "student_id, engagement_score, quest_completion_rate, days_active"
+                    }
+                    
+                    st.caption(f"Required: {required_cols[dataset_type]}")
+                    
+                    uploaded_file = st.file_uploader(
+                        f"Choose {dataset_type} file",
+                        type=['csv', 'xlsx', 'json'],
+                        key=f"upload_{dataset_type}",
+                        help=f"Upload {dataset_type} data in CSV, Excel, or JSON format"
+                    )
+                    
+                    if uploaded_file is not None:
+                        uploaded_files[dataset_type] = uploaded_file
+                        st.success(f"✅ {dataset_type} file uploaded")
+                
+                # Process uploaded files
+                if st.button("📊 Process Uploaded Data", type="primary"):
+                    if not uploaded_files:
+                        st.warning("Please upload at least one file")
+                    else:
+                        with st.spinner("Processing uploaded files..."):
+                            processed_datasets = {}
+                            errors = []
+                            
+                            for dataset_type, file in uploaded_files.items():
+                                df, message = process_uploaded_file(file, dataset_type)
+                                if df is not None:
+                                    processed_datasets[dataset_type] = df
+                                    st.success(f"✅ {dataset_type}: {len(df)} records loaded")
+                                else:
+                                    errors.append(f"{dataset_type}: {message}")
+                            
+                            if errors:
+                                st.error("Errors encountered:")
+                                for error in errors:
+                                    st.write(f"❌ {error}")
+                            
+                            if processed_datasets:
+                                # Merge with synthetic data for missing datasets
+                                complete_datasets = merge_uploaded_datasets(processed_datasets)
+                                
+                                # Save to session state
+                                st.session_state.datasets = complete_datasets
+                                st.session_state.data_generated = True
+                                st.success("✅ Data successfully loaded!")
+                                st.balloons()
+        
+        elif upload_method == "Single Combined File":
+            st.info("Upload a single Excel file with multiple sheets")
+            
+            combined_file = st.file_uploader(
+                "Choose Excel file with multiple sheets",
+                type=['xlsx'],
+                help="Each sheet should be named: students, movements, buildings, etc."
+            )
+            
+            if combined_file is not None:
+                if st.button("📊 Process Combined File", type="primary"):
+                    with st.spinner("Processing Excel file..."):
+                        try:
+                            # Read all sheets
+                            excel_file = pd.ExcelFile(combined_file)
+                            processed_datasets = {}
+                            errors = []
+                            
+                            for sheet_name in excel_file.sheet_names:
+                                if sheet_name in ['students', 'movements', 'buildings', 'quests', 'collaborations', 'learning_analytics']:
+                                    df = pd.read_excel(excel_file, sheet_name=sheet_name)
+                                    is_valid, message = validate_dataset_columns(df, sheet_name)
+                                    
+                                    if is_valid:
+                                        processed_datasets[sheet_name] = df
+                                        st.success(f"✅ {sheet_name}: {len(df)} records loaded")
+                                    else:
+                                        errors.append(f"{sheet_name}: {message}")
+                            
+                            if errors:
+                                st.error("Validation errors:")
+                                for error in errors:
+                                    st.write(f"❌ {error}")
+                            
+                            if processed_datasets:
+                                # Merge with synthetic data for missing datasets
+                                complete_datasets = merge_uploaded_datasets(processed_datasets)
+                                
+                                # Save to session state
+                                st.session_state.datasets = complete_datasets
+                                st.session_state.data_generated = True
+                                st.success("✅ Data successfully loaded from Excel!")
+                                st.balloons()
+                                
+                        except Exception as e:
+                            st.error(f"Error processing Excel file: {str(e)}")
+        
+        else:  # Use Sample Data
+            st.info("Download sample templates to understand the required data format")
+            
+            # Create sample datasets
+            samples = create_sample_datasets()
+            
+            # Download buttons for sample data
+            st.markdown("### 📥 Download Sample Templates")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Students template
+                csv_students = samples['students'].to_csv(index=False)
+                st.download_button(
+                    label="📚 Students Template",
+                    data=csv_students,
+                    file_name="students_template.csv",
+                    mime="text/csv"
+                )
+                
+                # Movements template
+                csv_movements = samples['movements'].to_csv(index=False)
+                st.download_button(
+                    label="🏃 Movements Template",
+                    data=csv_movements,
+                    file_name="movements_template.csv",
+                    mime="text/csv"
+                )
+            
+            with col2:
+                # Learning Analytics template
+                csv_analytics = samples['learning_analytics'].to_csv(index=False)
+                st.download_button(
+                    label="📊 Analytics Template",
+                    data=csv_analytics,
+                    file_name="learning_analytics_template.csv",
+                    mime="text/csv"
+                )
+                
+                # All templates in Excel
+                with pd.ExcelWriter('templates.xlsx', engine='xlsxwriter') as writer:
+                    samples['students'].to_excel(writer, sheet_name='students', index=False)
+                    samples['movements'].to_excel(writer, sheet_name='movements', index=False)
+                    samples['learning_analytics'].to_excel(writer, sheet_name='learning_analytics', index=False)
+                    writer.close()
+                    
+                    with open('templates.xlsx', 'rb') as f:
+                        st.download_button(
+                            label="📑 All Templates (Excel)",
+                            data=f.read(),
+                            file_name="all_templates.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                    os.remove('templates.xlsx')
+            
+            # Load sample data button
+            if st.button("🚀 Load Sample Data", type="primary"):
+                with st.spinner("Loading sample data..."):
+                    # Create full sample dataset
+                    if MinecraftEducationSimulator:
+                        simulator = MinecraftEducationSimulator()
+                        sample_datasets = simulator.generate_complete_dataset(10, 7)
+                        
+                        # Override with our sample data
+                        sample_datasets['students'] = samples['students']
+                        sample_datasets['learning_analytics'] = samples['learning_analytics']
+                        
+                        st.session_state.datasets = sample_datasets
+                        st.session_state.data_generated = True
+                        st.success("✅ Sample data loaded successfully!")
+                        st.balloons()
+                    else:
+                        st.error("Simulator module not available")
+        
+        # Data validation info
+        with st.expander("ℹ️ Data Format Requirements"):
+            st.markdown("""
+            ### Required Columns by Dataset:
+            
+            **Students:**
+            - `student_id`: Unique identifier
+            - `grade_level`: Grade (e.g., 6, 7, 8)
+            - `learning_style`: visual/kinesthetic/auditory
+            
+            **Movements:**
+            - `student_id`: Student identifier
+            - `timestamp`: Date/time of movement
+            - `x, y, z`: Coordinates
+            - `zone`: Area name
+            
+            **Learning Analytics:**
+            - `student_id`: Student identifier
+            - `engagement_score`: 0-1 scale
+            - `quest_completion_rate`: 0-1 scale
+            - `days_active`: Number of active days
+            
+            ### Tips:
+            - Dates should be in YYYY-MM-DD format
+            - Student IDs should be consistent across files
+            - Numeric values should not contain text
+            """)
     
     st.markdown("---")
     
@@ -279,7 +617,7 @@ with st.sidebar:
         """)
 
 # ============================================================================
-# MAIN CONTENT
+# MAIN CONTENT (rest remains the same as original)
 # ============================================================================
 
 # Title and description
@@ -295,22 +633,6 @@ if import_errors and MinecraftEducationSimulator is None:
     2. Check that all `__init__.py` files exist in the `src/` directories
     3. Verify your `requirements.txt` includes all necessary packages
     4. Try redeploying on Streamlit Cloud
-    
-    ### Required Directory Structure:
-    ```
-    minecraft-education-dashboard/
-    ├── app.py
-    ├── requirements.txt
-    ├── src/
-    │   ├── __init__.py
-    │   ├── analysis/
-    │   │   ├── __init__.py
-    │   │   ├── statistical.py
-    │   │   └── time_series.py
-    │   └── data_generation/
-    │       ├── __init__.py
-    │       └── simulator.py
-    ```
     """)
     st.stop()
 
@@ -321,7 +643,7 @@ if not st.session_state.data_generated:
         <h2>Welcome to the Minecraft Education Analytics Platform</h2>
         <p style='font-size: 18px;'>
             This dashboard demonstrates advanced analytics for game-based learning environments.
-            Get started by generating synthetic data in the sidebar.
+            Get started by generating synthetic data or uploading your own data in the sidebar.
         </p>
         <br>
         <h3>🚀 Key Features</h3>
@@ -460,9 +782,13 @@ else:
                 )
                 
                 # Create binary groups
-                students_with_analytics['learning_style_binary'] = students_with_analytics['collaboration_preference'].apply(
-                    lambda x: 'collaborative' if x in ['pairs', 'groups'] else 'solo'
-                )
+                if 'collaboration_preference' in students_with_analytics.columns:
+                    students_with_analytics['learning_style_binary'] = students_with_analytics['collaboration_preference'].apply(
+                        lambda x: 'collaborative' if x in ['pairs', 'groups'] else 'solo'
+                    )
+                else:
+                    # Fallback if column doesn't exist
+                    students_with_analytics['learning_style_binary'] = np.random.choice(['collaborative', 'solo'], len(students_with_analytics))
                 
                 # Add analysis button
                 if st.button("Run Statistical Analysis", key="run_stats"):
